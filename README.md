@@ -16,7 +16,7 @@
 ## 启动
 
 ```powershell
-cd C:\codex\image_generator_agent
+cd <项目根目录>
 copy .env.example .env
 # 编辑 .env，填入 SMART_LLM_API_KEY / BASE_URL / MODEL
 uv sync

@@ -54,6 +54,34 @@ class SmartLLMError(Exception):
     """User-visible failure talking to smart_llm. Never include API keys."""
 
 
+# 任一对词同时在文本中出现即视为内容拒绝（顺序无关）。
+# 正常画面提示词不含「生成/输出/照做」这类元话语，误报率趋近于零。
+_REFUSAL_PAIRS = [
+    ("不能", "生成"),
+    ("无法", "生成"),
+    ("无法", "帮助"),
+    ("没法", "照做"),
+    ("不能", "输出"),
+    ("不能", "创建"),
+    ("无法", "创建"),
+    ("拒绝", "请求"),
+    ("不符合", "规范"),
+    ("违反", "政策"),
+    ("cannot", "generate"),
+    ("can't", "generate"),
+    ("unable to", "generate"),
+]
+
+
+def _refusal_excerpt(text: str) -> str | None:
+    """Return a short excerpt when text looks like a policy refusal, else None."""
+    lowered = text.lower()
+    for first, second in _REFUSAL_PAIRS:
+        if first in lowered and second in lowered:
+            return " ".join(text.split())[:100]
+    return None
+
+
 def _strip_json_fence(text: str) -> str:
     stripped = text.strip()
     if stripped.startswith("```"):
@@ -62,6 +90,9 @@ def _strip_json_fence(text: str) -> str:
     start = stripped.find("{")
     end = stripped.rfind("}")
     if start == -1 or end == -1 or end <= start:
+        refusal = _refusal_excerpt(stripped)
+        if refusal:
+            raise SmartLLMError(f"smart_llm 拒绝了该请求: {refusal}")
         raise SmartLLMError("模型没有返回 JSON 对象")
     return stripped[start : end + 1]
 
@@ -78,6 +109,9 @@ def spec_from_payload(payload: dict[str, Any], default_width: int = 576, default
     prompt = str(payload.get("prompt") or "").strip()
     if not prompt:
         raise SmartLLMError("提示词为空")
+    refusal = _refusal_excerpt(prompt)
+    if refusal:
+        raise SmartLLMError(f"smart_llm 拒绝了该请求: {refusal}")
     return PromptSpec(
         prompt=prompt,
         negative_prompt=str(payload.get("negative_prompt") or "").strip(),
@@ -146,15 +180,17 @@ class SmartLLM:
         raw_intent = str(payload.get("intent") or "").strip()
         confidence = str(payload.get("confidence") or "").strip().lower()
         instruction = str(payload.get("instruction") or "").strip()
+        reason = str(payload.get("reason") or "").strip()
         try:
             intent = Intent(raw_intent)
         except ValueError:
-            return Intent.UNKNOWN, instruction
-        if intent not in allowed and intent != Intent.UNKNOWN:
-            return Intent.UNKNOWN, instruction
-        if confidence != "high":
-            return Intent.UNKNOWN, instruction
-        if intent == Intent.UNKNOWN:
+            intent = Intent.UNKNOWN
+        if intent not in allowed:
+            intent = Intent.UNKNOWN
+        if intent == Intent.UNKNOWN or confidence != "high":
+            refusal = _refusal_excerpt(reason)
+            if refusal:
+                raise SmartLLMError(f"smart_llm 拒绝了该请求: {refusal}")
             return Intent.UNKNOWN, instruction
         return intent, instruction
 
