@@ -10,7 +10,7 @@
 ## 要求
 
 - Python 3.11+
-- [uv](https://docs.astral.sh/uv/)
+- uv
 - 在 `.env` 填写 OpenAI 兼容的 `SMART_LLM_*`
 
 ## 启动
