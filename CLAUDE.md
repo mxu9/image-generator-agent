@@ -25,7 +25,7 @@ uv run python -m unittest tests.test_commands.ClassName.test_x  # 单个测试
 
 一次对话回合的管线（`cli.py` 的 `Agent.handle_line`）：
 
-1. 行首 `/` → `commands.py` 斜杠注册表（v1 只有 `/exit`），**不送 LLM**
+1. 行首 `/` → `commands.py` 斜杠注册表（`/exit` `/health` `/prompt`），**不送 LLM**
 2. `smart_llm.classify()` 意图分类 → 返回 `{intent, instruction, confidence, reason}` JSON
 3. 代码兜底（不信任模型自觉）：非 JSON / intent 不在枚举 / 不在当前 allowed 集合 / `confidence != high` → 一律视为 `unknown`
 4. `unknown` → 追问编号菜单（`intents.build_clarification_question`），进入 `awaiting_clarification`；用户回答中的纯数字/`2 修改说明` 由 `parse_numbered_choice` 在代码里直接映射，不走分类器
@@ -36,7 +36,7 @@ uv run python -m unittest tests.test_commands.ClassName.test_x  # 单个测试
 - `intents.py` — 意图枚举、各状态 `allowed_intents`、追问文案与编号解析。allowed 集合按会话状态变化：preview 下只允许 confirm/patch/cancel；idle 且已有 committed_spec 才允许 patch
 - `session.py` — `SessionState` 状态机（IDLE / PREVIEW / AWAITING_CLARIFICATION）+ `PromptSpec`（prompt/negative_prompt/width/height，默认 576×1024）。`working_spec()` 决定补丁基于哪一版
 - `smart_llm.py` — OpenAI 兼容客户端。三套独立 system prompt：`CLASSIFY_SYSTEM`（只分类，不写画面）、`DRAFT_SYSTEM`、`PATCH_SYSTEM`。所有调用要求只返回 JSON
-- `image_llm.py` — `ImageLLM` Protocol + `StubImageLLM`（v1 只写最小合法 PNG，不发 HTTP；`IMAGE_LLM_*` 配置仅写入 .env.example 备第二版用）
+- `image_llm.py` — `ImageLLM` Protocol + `SdImageLLM`（真打 OpenAI 兼容 `/v1/images/generations`：health 查 `/v1/models` 并校验 model 在列；generate 发 width/height + size，优先 `b64_json`、兜底 `url` 下载）+ `StubImageLLM`（占位 PNG）。`build_image_llm` 工厂按 `IMAGE_LLM_BACKEND=sd` 且 base_url 非空选 Sd，否则 Stub。错误用 `ImageLLMError` 分类（connect/timeout/transport/4xx/5xx/OOM/坏响应）；连接/超时/5xx 自动重试 2 次（间隔 2s），4xx/OOM/坏响应不重试
 - `output_store.py` — 每次出图新建 `outputs/<YYYYMMDD-HHMMSS>/`（重名加 `-1`），同目录写 prompt.txt 调试文件
 
 ## 硬性设计约束（来自 DESIGN.md，改动需慎重）
@@ -44,9 +44,9 @@ uv run python -m unittest tests.test_commands.ClassName.test_x  # 单个测试
 - 补丁式改图：旧 PromptSpec 分字段 + 修改意见一起交给模型产出**完整新 PromptSpec**；禁止字符串拼接旧 prompt + 修改意见
 - 分类与写提示词是**两次独立调用**，分类器不返回画面提示词，`instruction` 只保留用户原意
 - 成功出图后**只打印绝对路径**，不打印 prompt（preview 状态打印提示词是唯一例外）
-- 失败不自动重试：打印错误、状态不变、留在 REPL
-- 缺配置不退出进程：启动警告后仍进 REPL
-- 自然语言「退出」不当作退出指令；退出只认 `/exit`（Ctrl+C → exit 130）
+- `smart_llm` 失败不重试：打印错误、状态不变、留在 REPL；`image_llm` 仅对连接/超时/5xx 有限重试（2 次）
+- 缺配置或 SD 探活失败不退出进程：启动警告后仍进 REPL
+- 自然语言「退出」不当作退出指令；退出只认 `/exit`（Ctrl+C → exit 130）。斜杠命令现有 `/exit` `/health` `/prompt`
 - 同义说法（「开始吧」「do it」= confirm）靠 `smart_llm` 判断，代码不维护关键词表
 - API key / 内网地址只放 `.env`，不进代码和文档
 

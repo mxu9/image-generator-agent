@@ -37,8 +37,9 @@ class SlashCommandRegistry:
         name, args = self.parse(line)
         command = self.commands.get(name)
         if command is None:
+            known = ", ".join(f"/{item}" for item in sorted(self.commands))
             print(f"未知命令: /{name}")
-            print("可用命令: /exit")
+            print(f"可用命令: {known}")
             return
         command.handler(args)
 
@@ -47,7 +48,15 @@ def handle_exit(_args: list[str]) -> None:
     raise ExitRepl
 
 
-def build_registry() -> SlashCommandRegistry:
+def build_registry(on_health: Callable[[], None], on_prompt: Callable[[], None]) -> SlashCommandRegistry:
+    def handle_health(_args: list[str]) -> None:
+        on_health()
+
+    def handle_prompt(_args: list[str]) -> None:
+        on_prompt()
+
     registry = SlashCommandRegistry()
     registry.register("exit", handle_exit, help="退出")
+    registry.register("health", handle_health, help="检查生图服务状态")
+    registry.register("prompt", handle_prompt, help="显示当前提示词")
     return registry

@@ -2,7 +2,10 @@
 
 命令行 REPL：自然语言描述画面 → `smart_llm` 写中文提示词 → `image_llm` 出图 → 打印图片路径。
 
-第一版：`smart_llm` 真打云端；出图是占位 PNG（不调用 SD）。
+`smart_llm` 真打云端；`image_llm` 真打 SD（OpenAI 兼容 `/v1/images/generations`），
+含启动探活、错误分类与有限重试。`IMAGE_LLM_BACKEND=stub` 可切回占位 PNG（不发 HTTP）。
+
+斜杠命令：`/exit` 退出、`/health` 检查生图服务、`/prompt` 显示当前提示词。
 
 ## 要求
 

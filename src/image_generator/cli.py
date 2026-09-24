@@ -5,7 +5,7 @@ from pathlib import Path
 
 from image_generator.commands import ExitRepl, SlashCommandRegistry, build_registry
 from image_generator.config import AppConfig, load_config, project_root
-from image_generator.image_llm import StubImageLLM
+from image_generator.image_llm import ImageLLMError, ImageLLM, build_image_llm
 from image_generator.intents import (
     Intent,
     PATCH_INTENTS,
@@ -49,7 +49,7 @@ class Agent:
         config: AppConfig,
         session: Session,
         smart: SmartLLM | None,
-        image_llm: StubImageLLM,
+        image_llm: ImageLLM,
         commands: SlashCommandRegistry,
     ) -> None:
         self.config = config
@@ -80,9 +80,26 @@ class Agent:
         except SmartLLMError as exc:
             print_error(str(exc))
             return True
+        except ImageLLMError as exc:
+            print_error(f"生图失败({exc.kind}): {exc}")
+            return True
         except OSError as exc:
             print_error(f"写文件失败: {exc}")
             return True
+
+    def cmd_health(self) -> None:
+        result = self.image_llm.health()
+        if result.ok:
+            print(result.message)
+        else:
+            print(f"不可用: {result.message}")
+
+    def cmd_prompt(self) -> None:
+        spec = self.session.working_spec()
+        if spec is None or not spec.is_valid():
+            print("当前没有提示词。请先描述画面。")
+            return
+        print_preview(spec)
 
     def _classify_state(self) -> SessionState:
         if self.session.state == SessionState.AWAITING_CLARIFICATION:
@@ -234,10 +251,13 @@ def main(argv: list[str] | None = None) -> int:
             print_error(item)
 
     store = OutputStore(root / "outputs")
-    image_llm = StubImageLLM(store)
-    image_llm.health()
+    image_llm = build_image_llm(config.image, store)
+    health = image_llm.health()
+    if not health.ok:
+        print(f"WARNING: image_llm 探活失败: {health.message}", file=sys.stderr)
     smart = SmartLLM(config.smart) if config.smart.ok else None
-    agent = Agent(config, Session(), smart, image_llm, build_registry())
+    agent = Agent(config, Session(), smart, image_llm, SlashCommandRegistry())
+    agent.commands = build_registry(agent.cmd_health, agent.cmd_prompt)
 
     print("输入画面描述开始生图；需要先看提示词请在需求里说明。退出请输入 /exit。")
     try:
