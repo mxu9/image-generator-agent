@@ -50,6 +50,7 @@ class SmartLLMConfig:
 @dataclass
 class ImageLLMConfig:
     backend: str = "sd"
+    provider: str = ""
     base_url: str = ""
     api_key: str = ""
     model: str = "sd-cpp-local"
@@ -94,6 +95,7 @@ def load_config(root: Path | None = None) -> AppConfig:
     )
     image = ImageLLMConfig(
         backend=_env("IMAGE_LLM_BACKEND", "sd") or "sd",
+        provider=_env("IMAGE_LLM_PROVIDER"),
         base_url=_env("IMAGE_LLM_BASE_URL"),
         api_key=_env("IMAGE_LLM_API_KEY"),
         model=_env("IMAGE_LLM_MODEL", "sd-cpp-local") or "sd-cpp-local",

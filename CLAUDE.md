@@ -36,7 +36,8 @@ uv run python -m unittest tests.test_commands.ClassName.test_x  # 单个测试
 - `intents.py` — 意图枚举、各状态 `allowed_intents`、追问文案与编号解析。allowed 集合按会话状态变化：preview 下只允许 confirm/patch/cancel；idle 且已有 committed_spec 才允许 patch
 - `session.py` — `SessionState` 状态机（IDLE / PREVIEW / AWAITING_CLARIFICATION）+ `PromptSpec`（prompt/negative_prompt/width/height，默认 576×1024）。`working_spec()` 决定补丁基于哪一版
 - `smart_llm.py` — OpenAI 兼容客户端。三套独立 system prompt：`CLASSIFY_SYSTEM`（只分类，不写画面）、`DRAFT_SYSTEM`、`PATCH_SYSTEM`。所有调用要求只返回 JSON
-- `image_llm.py` — `ImageLLM` Protocol + `SdImageLLM`（真打 OpenAI 兼容 `/v1/images/generations`：health 查 `/v1/models` 并校验 model 在列；generate 发 width/height + size，优先 `b64_json`、兜底 `url` 下载）+ `StubImageLLM`（占位 PNG）。`build_image_llm` 工厂按 `IMAGE_LLM_BACKEND=sd` 且 base_url 非空选 Sd，否则 Stub。错误用 `ImageLLMError` 分类（connect/timeout/transport/4xx/5xx/OOM/坏响应）；连接/超时/5xx 自动重试 2 次（间隔 2s），4xx/OOM/坏响应不重试
+- `image_llm.py` — `ImageLLM` Protocol + `SdImageLLM`（真打 OpenAI 兼容 `/v1/images/generations`：health 查 `/v1/models` 并校验 model 在列；generate 发 width/height + size，优先 `b64_json`、兜底 `url` 下载）+ `StubImageLLM`（占位 PNG）。`build_image_llm` 工厂按 `IMAGE_LLM_BACKEND` 分发：`sd` 且 base_url 非空→Sd、`cloud`→`cloud_llm`、否则 Stub。错误用 `ImageLLMError` 分类（connect/timeout/transport/4xx/5xx/OOM/限流/云端审核拒绝/坏响应）；SD 连接/超时/5xx 自动重试 2 次（间隔 2s），4xx/OOM/坏响应不重试
+- `cloud_llm.py` — 云端生图。`ProviderProfile` 声明尺寸字段名/档位表/是否支持负向/响应键；任意宽高按对数比例距离映射到档位（平手取面积大）。`SiliconFlowImageLLM` 真打（`images[].url` 下载用**无鉴权**独立 client，URL 时效 1 小时须立即落盘）；**按次计费，任何错误都不自动重试**。`ZhipuStubImageLLM` 是 zhipu 占位（不发请求）。负向提示词不支持的 provider 丢弃并在 `meta.txt` 标注（sidecar 保留原文）；每次出图写 `meta.txt`（provider/model/requested/actual 尺寸）
 - `output_store.py` — 每次出图新建 `outputs/<YYYYMMDD-HHMMSS>/`（重名加 `-1`），同目录写 prompt.txt 调试文件
 
 ## 硬性设计约束（来自 design/DESIGN.md，改动需慎重）

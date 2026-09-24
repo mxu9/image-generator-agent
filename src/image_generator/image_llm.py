@@ -33,6 +33,8 @@ class ImageLLMError(Exception):
     KIND_HTTP_4XX = "http_4xx"
     KIND_HTTP_5XX = "http_5xx"
     KIND_OOM = "cuda_oom"
+    KIND_RATE_LIMITED = "rate_limited"
+    KIND_CONTENT_REJECTED = "content_rejected"
     KIND_BAD_RESPONSE = "bad_response"
 
     def __init__(self, kind: str, message: str) -> None:
@@ -45,6 +47,15 @@ class ImageLLMError(Exception):
 
 
 _OOM_MARKERS = ("out of memory", "cuda error", "cuda", "显存")
+
+
+def classify_transport_error(exc: httpx.HTTPError) -> ImageLLMError:
+    """Map an httpx transport exception to a user-visible ImageLLMError."""
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+        return ImageLLMError(ImageLLMError.KIND_CONNECT, f"无法连接生图服务: {exc}")
+    if isinstance(exc, httpx.TimeoutException):
+        return ImageLLMError(ImageLLMError.KIND_TIMEOUT, f"生图服务请求超时: {exc}")
+    return ImageLLMError(ImageLLMError.KIND_TRANSPORT, f"网络传输错误: {exc.__class__.__name__}: {exc}")
 
 
 def _write_prompt_files(run_dir: Path, spec: PromptSpec) -> None:
@@ -132,7 +143,7 @@ class SdImageLLM:
             try:
                 response = self._client.post("/v1/images/generations", json=body)
             except httpx.HTTPError as exc:
-                error = self._transport_error(exc)
+                error = classify_transport_error(exc)
             else:
                 error = self._response_error(response)
                 if error is None:
@@ -142,13 +153,6 @@ class SdImageLLM:
             if not error.retryable:
                 raise error
         raise last_error
-
-    def _transport_error(self, exc: httpx.HTTPError) -> ImageLLMError:
-        if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
-            return ImageLLMError(ImageLLMError.KIND_CONNECT, f"无法连接 SD 服务: {exc}")
-        if isinstance(exc, httpx.TimeoutException):
-            return ImageLLMError(ImageLLMError.KIND_TIMEOUT, f"SD 服务请求超时: {exc}")
-        return ImageLLMError(ImageLLMError.KIND_TRANSPORT, f"网络传输错误: {exc.__class__.__name__}: {exc}")
 
     def _response_error(self, response: httpx.Response) -> ImageLLMError | None:
         if response.status_code < 400:
@@ -197,6 +201,12 @@ class SdImageLLM:
 
 
 def build_image_llm(config: ImageLLMConfig, store: OutputStore) -> ImageLLM:
-    if config.backend.strip().lower() == "sd" and config.base_url.strip():
+    backend = config.backend.strip().lower()
+    if backend == "cloud":
+        # 延迟 import：cloud_llm 依赖本模块的 ImageLLMError / StubImageLLM
+        from image_generator.cloud_llm import build_cloud_image_llm
+
+        return build_cloud_image_llm(config, store)
+    if backend == "sd" and config.base_url.strip():
         return SdImageLLM(config, store)
     return StubImageLLM(store)
