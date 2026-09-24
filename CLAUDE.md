@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-命令行 REPL agent：用户输入自然语言画面描述 → `smart_llm`（云端 OpenAI 兼容 Chat）分类意图并写/改中文提示词 → `image_llm` 出图（v1 为 stub，写占位 PNG）→ 只打印图片绝对路径。设计文档在 `docs/DESIGN.md`（含全部已锁定决策），实现计划在 `docs/IMPLEMENTATION_PLAN.md`。
+命令行 REPL agent：用户输入自然语言画面描述 → `smart_llm`（云端 OpenAI 兼容 Chat）分类意图并写/改中文提示词 → `image_llm` 出图（v2 真打 SD，可切 stub）→ 只打印图片绝对路径。设计文档在 `design/DESIGN.md`（含全部已锁定决策），实现计划在 `design/IMPLEMENTATION_PLAN.md`；**`design/` 目录被 .gitignore 忽略，不入仓库**（仅本地参考，改代码前先对照其合同）。
 
 ## 常用命令
 
@@ -39,7 +39,7 @@ uv run python -m unittest tests.test_commands.ClassName.test_x  # 单个测试
 - `image_llm.py` — `ImageLLM` Protocol + `SdImageLLM`（真打 OpenAI 兼容 `/v1/images/generations`：health 查 `/v1/models` 并校验 model 在列；generate 发 width/height + size，优先 `b64_json`、兜底 `url` 下载）+ `StubImageLLM`（占位 PNG）。`build_image_llm` 工厂按 `IMAGE_LLM_BACKEND=sd` 且 base_url 非空选 Sd，否则 Stub。错误用 `ImageLLMError` 分类（connect/timeout/transport/4xx/5xx/OOM/坏响应）；连接/超时/5xx 自动重试 2 次（间隔 2s），4xx/OOM/坏响应不重试
 - `output_store.py` — 每次出图新建 `outputs/<YYYYMMDD-HHMMSS>/`（重名加 `-1`），同目录写 prompt.txt 调试文件
 
-## 硬性设计约束（来自 DESIGN.md，改动需慎重）
+## 硬性设计约束（来自 design/DESIGN.md，改动需慎重）
 
 - 补丁式改图：旧 PromptSpec 分字段 + 修改意见一起交给模型产出**完整新 PromptSpec**；禁止字符串拼接旧 prompt + 修改意见
 - 分类与写提示词是**两次独立调用**，分类器不返回画面提示词，`instruction` 只保留用户原意
