@@ -1,0 +1,23 @@
+[project]
+name = "image-generator-agent"
+version = "0.1.0"
+description = "CLI agent that turns natural-language image requests into prompts and images"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.40.0",
+    "python-dotenv>=1.0.1",
+]
+
+[project.scripts]
+image-generator = "image_generator.cli:main"
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
