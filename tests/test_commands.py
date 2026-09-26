@@ -1,6 +1,13 @@
+import io
 import unittest
+from contextlib import redirect_stdout
 
-from image_generator.commands import SlashCommandRegistry, build_registry, ExitRepl
+from image_generator.commands import (
+    HELP_USAGE,
+    ExitRepl,
+    SlashCommandRegistry,
+    build_registry,
+)
 
 
 def _registry() -> SlashCommandRegistry:
@@ -10,6 +17,13 @@ def _registry() -> SlashCommandRegistry:
         lambda _args: None,
         lambda _args: None,
     )
+
+
+def _capture(registry: SlashCommandRegistry, line: str) -> str:
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        registry.dispatch(line)
+    return buf.getvalue()
 
 
 class CommandTests(unittest.TestCase):
@@ -32,7 +46,10 @@ class CommandTests(unittest.TestCase):
 
     def test_unknown(self) -> None:
         registry = _registry()
-        registry.dispatch("/foo")
+        out = _capture(registry, "/foo")
+        self.assertIn("未知命令: /foo", out)
+        self.assertIn("/help", out)
+        self.assertNotIn("可用命令:", out)
 
     def test_health_and_prompt_dispatch(self) -> None:
         calls: list[str] = []
@@ -70,8 +87,39 @@ class CommandTests(unittest.TestCase):
         registry = _registry()
         self.assertEqual(
             sorted(registry.commands),
-            ["exit", "health", "load", "prompt", "sessions"],
+            ["exit", "health", "help", "load", "prompt", "sessions"],
         )
+
+    def test_help_lists_all_commands(self) -> None:
+        registry = _registry()
+        out = _capture(registry, "/help")
+        self.assertIn("斜杠命令：", out)
+        for name in ("exit", "health", "help", "load", "prompt", "sessions"):
+            self.assertIn(f"/{name}", out)
+        self.assertIn(HELP_USAGE, out)
+
+    def test_help_detail_and_leading_slash(self) -> None:
+        registry = _registry()
+        plain = _capture(registry, "/help sessions")
+        slashed = _capture(registry, "/help /sessions")
+        self.assertEqual(plain, slashed)
+        self.assertIn("/sessions —", plain)
+        self.assertIn("用法:", plain)
+        self.assertIn("/sessions <编号或 id>", plain)
+        self.assertIn("说明:", plain)
+        self.assertIn("最新在前", plain)
+
+    def test_help_unknown_command(self) -> None:
+        registry = _registry()
+        out = _capture(registry, "/help nope")
+        self.assertIn("没有命令: /nope", out)
+        self.assertIn(HELP_USAGE, out)
+
+    def test_help_extra_args_use_first_only(self) -> None:
+        registry = _registry()
+        out = _capture(registry, "/help exit ignored")
+        self.assertIn("/exit —", out)
+        self.assertIn("Ctrl+C", out)
 
 
 if __name__ == "__main__":

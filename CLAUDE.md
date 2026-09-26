@@ -25,7 +25,7 @@ uv run python -m unittest tests.test_commands.ClassName.test_x  # 单个测试
 
 一次对话回合的管线（`cli.py` 的 `Agent.handle_line`）：
 
-1. 行首 `/` → `commands.py` 斜杠注册表（`/exit` `/health` `/prompt`），**不送 LLM**
+1. 行首 `/` → `commands.py` 斜杠注册表（`/exit` `/health` `/help` `/prompt` `/sessions` `/load`），**不送 LLM**
 2. `smart_llm.classify()` 意图分类 → 返回 `{intent, instruction, confidence, reason}` JSON
 3. 代码兜底（不信任模型自觉）：非 JSON / intent 不在枚举 / 不在当前 allowed 集合 / `confidence != high` → 一律视为 `unknown`
 4. `unknown` → 追问编号菜单（`intents.build_clarification_question`），进入 `awaiting_clarification`；用户回答中的纯数字/`2 修改说明` 由 `parse_numbered_choice` 在代码里直接映射，不走分类器
@@ -49,7 +49,7 @@ uv run python -m unittest tests.test_commands.ClassName.test_x  # 单个测试
 - 成功出图后**只打印绝对路径**，不打印 prompt（preview 状态打印提示词是唯一例外）
 - `smart_llm` 失败不重试：打印错误、状态不变、留在 REPL；`image_llm` 仅对连接/超时/5xx 有限重试（2 次）
 - 缺配置或 SD 探活失败不退出进程：启动警告后仍进 REPL
-- 自然语言「退出」不当作退出指令；退出只认 `/exit`（Ctrl+C → exit 130）。斜杠命令现有 `/exit` `/health` `/prompt` `/sessions` `/load`
+- 自然语言「退出」不当作退出指令；退出只认 `/exit`（Ctrl+C → exit 130）。斜杠命令现有 `/exit` `/health` `/help` `/prompt` `/sessions` `/load`
 - 同义说法（「开始吧」「do it」= confirm）靠 `smart_llm` 判断，代码不维护关键词表
 - API key / 内网地址只放 `.env`，不进代码和文档
 
