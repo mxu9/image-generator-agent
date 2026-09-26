@@ -30,6 +30,7 @@ uv run python -m unittest tests.test_commands.ClassName.test_x  # 单个测试
 3. 代码兜底（不信任模型自觉）：非 JSON / intent 不在枚举 / 不在当前 allowed 集合 / `confidence != high` → 一律视为 `unknown`
 4. `unknown` → 追问编号菜单（`intents.build_clarification_question`），进入 `awaiting_clarification`；用户回答中的纯数字/`2 修改说明` 由 `parse_numbered_choice` 在代码里直接映射，不走分类器
 5. 按 intent 分派：`draft`（新需求）或 `patch`（补丁）第二次调用 `smart_llm` 产出完整 PromptSpec → `image_llm.generate` 落盘
+6. 分类、写提示词、生图这三段阻塞调用在 stderr 显示转圈和已等待秒数；非终端不显示。成功出图仍只在 stdout 打印绝对路径
 
 关键模块职责：
 

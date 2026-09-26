@@ -21,6 +21,7 @@ from image_generator.intents import (
 from image_generator.output_store import OutputStore
 from image_generator.session import PromptSpec, Session, SessionState
 from image_generator.smart_llm import SmartLLM, SmartLLMError
+from image_generator.spinner import Spinner
 
 
 def configure_stdio() -> None:
@@ -181,12 +182,13 @@ class Agent:
         working = self.session.working_spec()
         if working is not None:
             current = working.prompt
-        intent, instruction = self.smart.classify(
-            text,
-            state=state,
-            has_committed_spec=self.session.has_committed_spec(),
-            current_prompt=current,
-        )
+        with Spinner("正在理解"):
+            intent, instruction = self.smart.classify(
+                text,
+                state=state,
+                has_committed_spec=self.session.has_committed_spec(),
+                current_prompt=current,
+            )
         if intent == Intent.UNKNOWN:
             self._ask_clarification(text)
             return
@@ -254,7 +256,8 @@ class Agent:
         self.session.awaiting_instruction_for = None
 
     def _generate_new(self, goal: str, preview: bool) -> None:
-        spec = self.smart.draft(goal)
+        with Spinner("正在写提示词"):
+            spec = self.smart.draft(goal)
         self.session.user_goal = goal
         self.session.active_spec = spec
         self.session.history_id = None
@@ -282,7 +285,8 @@ class Agent:
                 "还没有上一版提示词，无法按修改意见打补丁。请先描述画面。"
             )
             return
-        spec = self.smart.patch(base, instruction)
+        with Spinner("正在写提示词"):
+            spec = self.smart.patch(base, instruction)
         self.session.active_spec = spec
         self.session.pending_kind = "patch"
         self.session.pending_instruction = instruction
@@ -302,7 +306,8 @@ class Agent:
         print("已取消本次生图。")
 
     def _emit(self, spec: PromptSpec) -> None:
-        path = self.image_llm.generate(spec)
+        with Spinner("正在生图"):
+            path = self.image_llm.generate(spec)
         self.session.active_spec = spec
         self.session.committed_spec = spec
         self.session.last_image_path = path
