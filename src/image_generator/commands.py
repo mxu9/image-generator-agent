@@ -48,15 +48,28 @@ def handle_exit(_args: list[str]) -> None:
     raise ExitRepl
 
 
-def build_registry(on_health: Callable[[], None], on_prompt: Callable[[], None]) -> SlashCommandRegistry:
+def build_registry(
+    on_health: Callable[[], None],
+    on_prompt: Callable[[], None],
+    on_sessions: Callable[[list[str]], None],
+    on_load: Callable[[list[str]], None],
+) -> SlashCommandRegistry:
     def handle_health(_args: list[str]) -> None:
         on_health()
 
     def handle_prompt(_args: list[str]) -> None:
         on_prompt()
 
+    def handle_sessions(args: list[str]) -> None:
+        on_sessions(args)
+
+    def handle_load(args: list[str]) -> None:
+        on_load(args)
+
     registry = SlashCommandRegistry()
     registry.register("exit", handle_exit, help="退出")
     registry.register("health", handle_health, help="检查生图服务状态")
     registry.register("prompt", handle_prompt, help="显示当前提示词")
+    registry.register("sessions", handle_sessions, help="列出或查看历史会话")
+    registry.register("load", handle_load, help="载入历史会话最新一版")
     return registry

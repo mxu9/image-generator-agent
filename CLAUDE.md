@@ -34,7 +34,8 @@ uv run python -m unittest tests.test_commands.ClassName.test_x  # 单个测试
 关键模块职责：
 
 - `intents.py` — 意图枚举、各状态 `allowed_intents`、追问文案与编号解析。allowed 集合按会话状态变化：preview 下只允许 confirm/patch/cancel；idle 且已有 committed_spec 才允许 patch
-- `session.py` — `SessionState` 状态机（IDLE / PREVIEW / AWAITING_CLARIFICATION）+ `PromptSpec`（prompt/negative_prompt/width/height，默认 576×1024）。`working_spec()` 决定补丁基于哪一版
+- `session.py` — `SessionState` 状态机（IDLE / PREVIEW / AWAITING_CLARIFICATION）+ `PromptSpec`（prompt/negative_prompt/width/height，默认 576×1024）。`working_spec()` 决定补丁基于哪一版；`history_id` 指向当前历史会话
+- `history.py` — 出图成功后写入 `sessions/<id>.json`（初稿+补丁链，图片只记相对路径）；`/sessions` 列表与详情、`/load` 载入最新版
 - `smart_llm.py` — OpenAI 兼容客户端。三套独立 system prompt：`CLASSIFY_SYSTEM`（只分类，不写画面）、`DRAFT_SYSTEM`、`PATCH_SYSTEM`。所有调用要求只返回 JSON
 - `image_llm.py` — `ImageLLM` Protocol + `SdImageLLM`（真打 OpenAI 兼容 `/v1/images/generations`：health 查 `/v1/models` 并校验 model 在列；generate 发 width/height + size，优先 `b64_json`、兜底 `url` 下载）+ `StubImageLLM`（占位 PNG）。`build_image_llm` 工厂按 `IMAGE_LLM_BACKEND` 分发：`sd` 且 base_url 非空→Sd、`cloud`→`cloud_llm`、否则 Stub。错误用 `ImageLLMError` 分类（connect/timeout/transport/4xx/5xx/OOM/限流/云端审核拒绝/坏响应）；SD 连接/超时/5xx 自动重试 2 次（间隔 2s），4xx/OOM/坏响应不重试
 - `cloud_llm.py` — 云端生图。`ProviderProfile` 声明尺寸字段名/档位表/是否支持负向/响应键；任意宽高按对数比例距离映射到档位（平手取面积大）。`SiliconFlowImageLLM` 真打（`images[].url` 下载用**无鉴权**独立 client，URL 时效 1 小时须立即落盘）；**按次计费，任何错误都不自动重试**。`ZhipuStubImageLLM` 是 zhipu 占位（不发请求）。负向提示词不支持的 provider 丢弃并在 `meta.txt` 标注（sidecar 保留原文）；每次出图写 `meta.txt`（provider/model/requested/actual 尺寸）
@@ -47,7 +48,7 @@ uv run python -m unittest tests.test_commands.ClassName.test_x  # 单个测试
 - 成功出图后**只打印绝对路径**，不打印 prompt（preview 状态打印提示词是唯一例外）
 - `smart_llm` 失败不重试：打印错误、状态不变、留在 REPL；`image_llm` 仅对连接/超时/5xx 有限重试（2 次）
 - 缺配置或 SD 探活失败不退出进程：启动警告后仍进 REPL
-- 自然语言「退出」不当作退出指令；退出只认 `/exit`（Ctrl+C → exit 130）。斜杠命令现有 `/exit` `/health` `/prompt`
+- 自然语言「退出」不当作退出指令；退出只认 `/exit`（Ctrl+C → exit 130）。斜杠命令现有 `/exit` `/health` `/prompt` `/sessions` `/load`
 - 同义说法（「开始吧」「do it」= confirm）靠 `smart_llm` 判断，代码不维护关键词表
 - API key / 内网地址只放 `.env`，不进代码和文档
 

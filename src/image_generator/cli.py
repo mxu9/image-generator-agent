@@ -5,6 +5,11 @@ from pathlib import Path
 
 from image_generator.commands import ExitRepl, SlashCommandRegistry, build_registry
 from image_generator.config import AppConfig, load_config, project_root
+from image_generator.history import (
+    LOAD_USAGE,
+    SESSIONS_USAGE,
+    HistoryStore,
+)
 from image_generator.image_llm import ImageLLMError, ImageLLM, build_image_llm
 from image_generator.intents import (
     Intent,
@@ -51,12 +56,14 @@ class Agent:
         smart: SmartLLM | None,
         image_llm: ImageLLM,
         commands: SlashCommandRegistry,
+        history: HistoryStore,
     ) -> None:
         self.config = config
         self.session = session
         self.smart = smart
         self.image_llm = image_llm
         self.commands = commands
+        self.history = history
 
     def handle_line(self, line: str) -> bool:
         text = line.strip()
@@ -66,11 +73,18 @@ class Agent:
             self.commands.dispatch(text)
             return True
         if self.smart is None:
-            print_error("SMART_LLM 未配置，无法处理自然语言。请在 .env 填写 SMART_LLM_* 后重试。")
+            print_error(
+                "SMART_LLM 未配置，无法处理自然语言。请在 .env 填写 SMART_LLM_* 后重试。"
+            )
             return True
         try:
             if self.session.awaiting_instruction_for is not None:
-                self._run_intent(self.session.awaiting_instruction_for, text, text, from_number=True)
+                self._run_intent(
+                    self.session.awaiting_instruction_for,
+                    text,
+                    text,
+                    from_number=True,
+                )
                 return True
             if self.session.state == SessionState.AWAITING_CLARIFICATION:
                 self._handle_clarification(text)
@@ -100,6 +114,47 @@ class Agent:
             print("当前没有提示词。请先描述画面。")
             return
         print_preview(spec)
+
+    def cmd_sessions(self, args: list[str]) -> None:
+        if not args:
+            print(self.history.format_list())
+            return
+        record = self.history.resolve(args[0])
+        if record is None:
+            print(f"找不到会话: {args[0]}")
+            print(SESSIONS_USAGE)
+            return
+        print(self.history.format_detail(record))
+
+    def cmd_load(self, args: list[str]) -> None:
+        if not args:
+            print(LOAD_USAGE)
+            return
+        record = self.history.resolve(args[0])
+        if record is None:
+            print(f"找不到会话: {args[0]}")
+            print(LOAD_USAGE)
+            return
+        latest = record.revisions[-1]
+        spec = PromptSpec(
+            prompt=latest.prompt,
+            negative_prompt=latest.negative_prompt,
+            width=latest.width,
+            height=latest.height,
+        )
+        self.session.clear_clarification()
+        self.session.awaiting_instruction_for = None
+        self.session.pending_kind = None
+        self.session.pending_instruction = ""
+        self.session.user_goal = record.user_goal
+        self.session.committed_spec = spec
+        self.session.active_spec = spec
+        self.session.last_image_path = self.history.absolute_image_path(
+            latest.image_path
+        )
+        self.session.history_id = record.id
+        self.session.state = SessionState.IDLE
+        print(self.history.format_load(record))
 
     def _classify_state(self) -> SessionState:
         if self.session.state == SessionState.AWAITING_CLARIFICATION:
@@ -149,7 +204,13 @@ class Agent:
         self.session.pending_question = question
         print(question)
 
-    def _run_intent(self, intent: Intent, instruction: str, source_text: str, from_number: bool) -> None:
+    def _run_intent(
+        self,
+        intent: Intent,
+        instruction: str,
+        source_text: str,
+        from_number: bool,
+    ) -> None:
         if intent == Intent.UNKNOWN:
             self._ask_clarification(source_text)
             return
@@ -196,6 +257,9 @@ class Agent:
         spec = self.smart.draft(goal)
         self.session.user_goal = goal
         self.session.active_spec = spec
+        self.session.history_id = None
+        self.session.pending_kind = "draft"
+        self.session.pending_instruction = ""
         self._finish_round_meta()
         if preview:
             self.session.state = SessionState.PREVIEW
@@ -214,10 +278,14 @@ class Agent:
     def _patch(self, instruction: str, preview: bool) -> None:
         base = self.session.working_spec()
         if base is None:
-            print_error("还没有上一版提示词，无法按修改意见打补丁。请先描述画面。")
+            print_error(
+                "还没有上一版提示词，无法按修改意见打补丁。请先描述画面。"
+            )
             return
         spec = self.smart.patch(base, instruction)
         self.session.active_spec = spec
+        self.session.pending_kind = "patch"
+        self.session.pending_instruction = instruction
         self._finish_round_meta()
         if preview:
             self.session.state = SessionState.PREVIEW
@@ -227,6 +295,8 @@ class Agent:
 
     def _cancel(self) -> None:
         self.session.active_spec = self.session.committed_spec
+        self.session.pending_kind = None
+        self.session.pending_instruction = ""
         self._finish_round_meta()
         self.session.state = SessionState.IDLE
         print("已取消本次生图。")
@@ -237,7 +307,38 @@ class Agent:
         self.session.committed_spec = spec
         self.session.last_image_path = path
         self.session.state = SessionState.IDLE
+        self._save_history(spec, path)
         print(str(path))
+
+    def _save_history(self, spec: PromptSpec, path: Path) -> None:
+        kind = self.session.pending_kind or "draft"
+        instruction = self.session.pending_instruction
+        goal = self.session.user_goal or ""
+        try:
+            existing = None
+            if self.session.history_id:
+                existing = self.history.get_by_id(self.session.history_id)
+            if existing is None:
+                record = self.history.start(
+                    kind=kind,
+                    instruction=instruction,
+                    spec=spec,
+                    image_path=path,
+                    user_goal=goal,
+                )
+            else:
+                record = self.history.append(
+                    self.session.history_id,
+                    kind=kind,
+                    instruction=instruction,
+                    spec=spec,
+                    image_path=path,
+                )
+            self.session.history_id = record.id
+        except OSError as exc:
+            print_error(f"会话保存失败: {exc}")
+        self.session.pending_kind = None
+        self.session.pending_instruction = ""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -246,18 +347,27 @@ def main(argv: list[str] | None = None) -> int:
     root = project_root()
     config = load_config(root)
     if config.problems:
-        print("WARNING: SMART_LLM 配置不完整，意图分类和写提示词会失败。", file=sys.stderr)
+        print(
+            "WARNING: SMART_LLM 配置不完整，意图分类和写提示词会失败。",
+            file=sys.stderr,
+        )
         for item in config.problems:
             print_error(item)
 
     store = OutputStore(root / "outputs")
+    history = HistoryStore(root / "sessions", project_root=root)
     image_llm = build_image_llm(config.image, store)
     health = image_llm.health()
     if not health.ok:
         print(f"WARNING: image_llm 探活失败: {health.message}", file=sys.stderr)
     smart = SmartLLM(config.smart) if config.smart.ok else None
-    agent = Agent(config, Session(), smart, image_llm, SlashCommandRegistry())
-    agent.commands = build_registry(agent.cmd_health, agent.cmd_prompt)
+    agent = Agent(config, Session(), smart, image_llm, SlashCommandRegistry(), history)
+    agent.commands = build_registry(
+        agent.cmd_health,
+        agent.cmd_prompt,
+        agent.cmd_sessions,
+        agent.cmd_load,
+    )
 
     print("输入画面描述开始生图；需要先看提示词请在需求里说明。退出请输入 /exit。")
     try:

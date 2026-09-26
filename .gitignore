@@ -9,3 +9,5 @@ outputs/*
 !outputs/.gitkeep
 *.egg-info/
 design/*
+sessions/*
+!sessions/.gitkeep

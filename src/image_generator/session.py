@@ -36,6 +36,9 @@ class Session:
     clarification_intents: list[Intent] = field(default_factory=list)
     pre_clarification_state: SessionState = SessionState.IDLE
     awaiting_instruction_for: Intent | None = None
+    history_id: str | None = None
+    pending_kind: str | None = None
+    pending_instruction: str = ""
 
     def has_committed_spec(self) -> bool:
         return self.committed_spec is not None
