@@ -9,7 +9,8 @@ import httpx
 from image_generator.cloud_llm import (
     SILICONFLOW,
     SiliconFlowImageLLM,
-    ZhipuStubImageLLM,
+    ZHIPU,
+    ZhipuImageLLM,
     map_size,
 )
 from image_generator.config import ImageLLMConfig
@@ -167,16 +168,174 @@ class HealthTests(unittest.TestCase):
         self.assertIn("不在服务列表中", result.message)
 
 
-class ZhipuStubTests(unittest.TestCase):
-    def test_stub_writes_placeholder_and_meta(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            llm = ZhipuStubImageLLM(OutputStore(Path(tmp)))
-            self.assertIn("stub", llm.health().message)
-            path = llm.generate(spec())
-            self.assertTrue(path.read_bytes().startswith(b"\x89PNG"))
-            meta = (path.parent / "meta.txt").read_text(encoding="utf-8")
-            self.assertIn("provider=zhipu", meta)
-            self.assertIn("negative_prompt=dropped", meta)
+def make_zhipu(handler, model="sd-cpp-local"):
+    requests: list[httpx.Request] = []
+
+    def wrapped(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return handler(request)
+
+    config = ImageLLMConfig(
+        backend="cloud",
+        provider="zhipu",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
+        api_key="sk-test",
+        model=model,
+        timeout=5.0,
+        connect_timeout=5.0,
+    )
+    llm = ZhipuImageLLM(
+        config,
+        OutputStore(Path(tempfile.mkdtemp())),
+        transport=httpx.MockTransport(wrapped),
+    )
+    llm.DOWNLOAD_RETRY_DELAY = 0
+    return llm, requests
+
+
+def _posts(requests: list[httpx.Request]) -> list[httpx.Request]:
+    return [item for item in requests if item.url.path.endswith("/images/generations")]
+
+
+class ZhipuGenerateTests(unittest.TestCase):
+    def test_portrait_maps_to_recommended_tier(self) -> None:
+        self.assertEqual(map_size(ZHIPU, 576, 1024), (960, 1728))
+
+    def test_square_and_landscape(self) -> None:
+        self.assertEqual(map_size(ZHIPU, 1024, 1024), (1280, 1280))
+        self.assertEqual(map_size(ZHIPU, 1024, 576), (1728, 960))
+
+    def test_url_download_without_auth_and_drops_negative(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/images/generations"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [{"url": "https://cdn.test/img.png"}],
+                        "content_filter": [{"role": "assistant", "level": 1}],
+                    },
+                )
+            return httpx.Response(200, content=PNG_BYTES)
+
+        llm, requests = make_zhipu(handler)
+        path = llm.generate(spec())
+        self.assertEqual(path.read_bytes(), PNG_BYTES)
+        body = _posts(requests)[0].read()
+        self.assertIn(b'"model":"glm-image"', body)
+        self.assertIn(b'"size":"960x1728"', body)
+        self.assertIn(b'"quality":"hd"', body)
+        self.assertNotIn(b"negative_prompt", body)
+        self.assertNotIn(b"batch_size", body)
+        self.assertNotIn(b"watermark_enabled", body)
+        self.assertNotIn(b"user_id", body)
+        download = requests[-1]
+        self.assertNotIn("authorization", {key.lower() for key in download.headers})
+        meta = (path.parent / "meta.txt").read_text(encoding="utf-8")
+        self.assertIn("provider=zhipu", meta)
+        self.assertIn("model=glm-image", meta)
+        self.assertIn("requested=576x1024", meta)
+        self.assertIn("actual=960x1728", meta)
+        self.assertIn("negative_prompt=dropped", meta)
+        self.assertIn("糊", (path.parent / "negative_prompt.txt").read_text(encoding="utf-8"))
+
+    def test_explicit_model_kept(self) -> None:
+        llm, requests = make_zhipu(
+            lambda request: httpx.Response(200, json={"data": [{"b64_json": B64}]}),
+            model="cogview-4",
+        )
+        llm.generate(spec())
+        self.assertIn(b'"model":"cogview-4"', _posts(requests)[0].read())
+
+    def test_prompt_over_limit_not_sent(self) -> None:
+        llm, requests = make_zhipu(lambda request: httpx.Response(500, text="no"))
+        too_long = PromptSpec(prompt="猫" * 1001, width=576, height=1024)
+        with self.assertRaises(ImageLLMError) as ctx:
+            llm.generate(too_long)
+        self.assertEqual(ctx.exception.kind, ImageLLMError.KIND_HTTP_4XX)
+        self.assertIn("未发送请求", str(ctx.exception))
+        self.assertEqual(requests, [])
+
+    def test_prompt_at_limit_is_sent(self) -> None:
+        llm, requests = make_zhipu(
+            lambda request: httpx.Response(200, json={"data": [{"b64_json": B64}]})
+        )
+        llm.generate(PromptSpec(prompt="猫" * 1000, width=576, height=1024))
+        self.assertEqual(len(_posts(requests)), 1)
+
+    def test_audit_code_not_retried(self) -> None:
+        llm, requests = make_zhipu(
+            lambda request: httpx.Response(
+                400, json={"error": {"code": 1301, "message": "blocked"}}
+            )
+        )
+        with self.assertRaises(ImageLLMError) as ctx:
+            llm.generate(spec())
+        self.assertEqual(ctx.exception.kind, ImageLLMError.KIND_CONTENT_REJECTED)
+        self.assertEqual(len(_posts(requests)), 1)
+
+    def test_rate_limit_code_not_retried(self) -> None:
+        llm, requests = make_zhipu(
+            lambda request: httpx.Response(
+                400, json={"error": {"code": "1302", "message": "slow down"}}
+            )
+        )
+        with self.assertRaises(ImageLLMError) as ctx:
+            llm.generate(spec())
+        self.assertEqual(ctx.exception.kind, ImageLLMError.KIND_RATE_LIMITED)
+        self.assertEqual(len(requests), 1)
+
+    def test_generation_5xx_not_retried(self) -> None:
+        llm, requests = make_zhipu(lambda request: httpx.Response(503, text="overloaded"))
+        with self.assertRaises(ImageLLMError) as ctx:
+            llm.generate(spec())
+        self.assertEqual(ctx.exception.kind, ImageLLMError.KIND_HTTP_5XX)
+        self.assertEqual(len(requests), 1)
+
+    def test_download_retries_then_succeeds(self) -> None:
+        state = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/images/generations"):
+                return httpx.Response(200, json={"data": [{"url": "https://cdn.test/img.png"}]})
+            state["n"] += 1
+            if state["n"] <= 3:
+                return httpx.Response(503, text="cdn")
+            return httpx.Response(200, content=PNG_BYTES)
+
+        llm, requests = make_zhipu(handler)
+        path = llm.generate(spec())
+        self.assertEqual(path.read_bytes(), PNG_BYTES)
+        self.assertEqual(len(_posts(requests)), 1)
+        self.assertEqual(state["n"], 4)
+
+    def test_download_retries_exhausted_does_not_regenerate(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/images/generations"):
+                return httpx.Response(200, json={"data": [{"url": "https://cdn.test/img.png"}]})
+            raise httpx.ConnectError("cdn down")
+
+        llm, requests = make_zhipu(handler)
+        with self.assertRaises(ImageLLMError) as ctx:
+            llm.generate(spec())
+        self.assertEqual(ctx.exception.kind, ImageLLMError.KIND_BAD_RESPONSE)
+        self.assertEqual(len(_posts(requests)), 1)
+        self.assertEqual(len(requests) - 1, 4)
+
+    def test_bad_response_shape(self) -> None:
+        llm, _ = make_zhipu(lambda request: httpx.Response(200, json={"data": []}))
+        with self.assertRaises(ImageLLMError) as ctx:
+            llm.generate(spec())
+        self.assertEqual(ctx.exception.kind, ImageLLMError.KIND_BAD_RESPONSE)
+
+    def test_health_does_not_request(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError(str(request.url))
+
+        llm, requests = make_zhipu(handler)
+        result = llm.health()
+        self.assertTrue(result.ok)
+        self.assertIn("未发请求", result.message)
+        self.assertEqual(requests, [])
 
 
 class FactoryTests(unittest.TestCase):
@@ -190,9 +349,24 @@ class FactoryTests(unittest.TestCase):
         )
         self.assertIsInstance(build_image_llm(config, self.store()), SiliconFlowImageLLM)
 
-    def test_cloud_zhipu_stub(self) -> None:
-        config = ImageLLMConfig(backend="cloud", provider="zhipu")
-        self.assertIsInstance(build_image_llm(config, self.store()), ZhipuStubImageLLM)
+    def test_cloud_zhipu(self) -> None:
+        config = ImageLLMConfig(
+            backend="cloud",
+            provider="zhipu",
+            base_url="https://open.bigmodel.cn/api/paas/v4",
+            api_key="k",
+            model="glm-image",
+        )
+        self.assertIsInstance(build_image_llm(config, self.store()), ZhipuImageLLM)
+
+    def test_cloud_zhipu_missing_key_falls_back(self) -> None:
+        config = ImageLLMConfig(
+            backend="cloud",
+            provider="zhipu",
+            base_url="https://open.bigmodel.cn/api/paas/v4",
+            api_key="",
+        )
+        self.assertIsInstance(build_image_llm(config, self.store()), StubImageLLM)
 
     def test_cloud_unknown_provider_falls_back_to_stub(self) -> None:
         config = ImageLLMConfig(backend="cloud", provider="nope")

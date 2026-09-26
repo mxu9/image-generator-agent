@@ -4,7 +4,7 @@
 
 `smart_llm` 真打云端；`image_llm` 支持三种 backend：`sd`（本地，OpenAI 兼容
 `/v1/images/generations`，含探活、错误分类与有限重试）、`cloud`（云端，当前
-`IMAGE_LLM_PROVIDER=siliconflow` 真打 Qwen-Image、`zhipu` 为 stub 占位；按次计费不自动重试）、
+`IMAGE_LLM_PROVIDER=siliconflow` 真打 Qwen-Image、`zhipu` 真打 glm-image；按次计费，生图不自动重试）、
 `stub`（占位 PNG，不发 HTTP）。
 
 斜杠命令：`/exit` 退出、`/health` 检查生图服务、`/prompt` 显示当前提示词、`/sessions` 列出历史会话、`/load` 载入会话继续改图。
